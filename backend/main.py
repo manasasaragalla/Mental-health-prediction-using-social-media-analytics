@@ -58,12 +58,15 @@ help when there is immediate danger. Do not provide self-harm instructions.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global predictor
+
     print("Starting SocialSense backend...")
 
-    # The baseline models should load even when RoBERTa weights are missing.
     predictor = StressPredictor()
+
     print("Backend ready!")
+
     yield
+
     predictor = None
 
 
@@ -74,6 +77,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# CORS configuration for the React + Vite frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -97,7 +102,10 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
-    history: list[ChatMessage] = Field(default_factory=list, max_length=12)
+    history: list[ChatMessage] = Field(
+        default_factory=list,
+        max_length=12,
+    )
 
 
 @app.get("/")
@@ -112,65 +120,104 @@ def home():
 def health():
     return {
         "status": "ready" if predictor is not None else "loading",
-        "chat_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "chat_configured": bool(os.getenv("GROQ_API_KEY"))
     }
 
 
 @app.post("/predict")
 def predict(request: PredictionRequest):
     if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Please enter some text.")
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter some text.",
+        )
 
     if predictor is None:
-        raise HTTPException(status_code=503, detail="Models are not ready.")
+        raise HTTPException(
+            status_code=503,
+            detail="Models are not ready.",
+        )
 
     return predictor.predict(request.text)
+
 
 
 @app.post("/chat")
 def chat(request: ChatRequest):
     message = request.message.strip()
+
     if not message:
-        raise HTTPException(status_code=400, detail="Please enter a message.")
+        raise HTTPException(
+            status_code=400,
+            detail="Please enter a message.",
+        )
 
     lowered = message.lower()
+
+    # Basic crisis phrase screening
     if any(phrase in lowered for phrase in CRISIS_PHRASES):
         return {
             "reply": CRISIS_REPLY,
             "safety_notice": True,
         }
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    # Get Groq API key
+    api_key = os.getenv("GROQ_API_KEY")
+
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="Chat is not configured. Add OPENAI_API_KEY to the backend .env file.",
+            detail="Chat is not configured. Add GROQ_API_KEY to the backend .env file.",
         )
 
-    # Only accept user/assistant history; limit the context sent to the API.
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Prepare conversation history
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        }
+    ]
+
     for item in request.history[-10:]:
         if item.role in ("user", "assistant"):
             messages.append({
                 "role": item.role,
                 "content": item.content[:4000],
             })
-    messages.append({"role": "user", "content": message})
 
+    messages.append({
+        "role": "user",
+        "content": message,
+    })
+
+    # Connect to Groq API
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1"
+        )
+
         completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+            model=os.getenv(
+                "GROQ_CHAT_MODEL",
+                "openai/gpt-oss-20b"
+            ),
             messages=messages,
             max_tokens=350,
         )
+
         reply = completion.choices[0].message.content
+
         return {
             "reply": reply or "I'm here to listen. Would you like to tell me a little more?",
             "safety_notice": False,
         }
-    except OpenAIError:
-        # Avoid returning credentials or detailed provider errors to the browser.
+
+    except OpenAIError as exc:
+        print(
+            f"Groq API Error: {type(exc).__name__}: {exc}"
+        )
+
         raise HTTPException(
             status_code=502,
             detail="The companion is temporarily unavailable. Please try again shortly.",

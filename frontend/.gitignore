@@ -22,3 +22,30 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Environment variables and API keys
+.env
+.env.*
+!.env.example
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Model weights and checkpoints
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# Logs
+*.log
+
+# Frontend dependencies
+node_modules/
+dist/
